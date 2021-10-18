@@ -16,6 +16,12 @@
 #include "VertexBuffer.h"
 #include "VertexArrayObject.h"
 #include "Shader.h"
+#include "Camera.h"
+
+#include "Utils/MeshBuilder.h"
+#include "Utils/MeshFactory.h"
+#include "Utils/ObjLoader.h"
+#include "VertexTypes.h"
 
 #define LOG_GL_NOTIFICATIONS
 
@@ -56,10 +62,9 @@ GLFWwindow* window;
 // The current size of our window in pixels
 glm::ivec2 windowSize = glm::ivec2(800, 800);
 // The title of our GLFW window
-std::string windowTitle = "Alexander Broersma - 100805938";
+std::string windowTitle = "100805938 - Alexander Broersma";
 
-void GlfwWindowResizedCallback(GLFWwindow* window, int width, int height) 
-{
+void GlfwWindowResizedCallback(GLFWwindow* window, int width, int height) {
 	glViewport(0, 0, width, height);
 	windowSize = glm::ivec2(width, height);
 }
@@ -69,7 +74,6 @@ void GlfwWindowResizedCallback(GLFWwindow* window, int width, int height)
 /// Also handles creating the GLFW window
 /// </summary>
 /// <returns>True if GLFW was initialized, false if otherwise</returns>
-
 bool initGLFW() {
 	// Initialize GLFW
 	if (glfwInit() == GLFW_FALSE) {
@@ -80,7 +84,7 @@ bool initGLFW() {
 	//Create a new GLFW window and make it current
 	window = glfwCreateWindow(windowSize.x, windowSize.y, windowTitle.c_str(), nullptr, nullptr);
 	glfwMakeContextCurrent(window);
-
+	
 	// Set our window resized callback
 	glfwSetWindowSizeCallback(window, GlfwWindowResizedCallback);
 
@@ -99,56 +103,6 @@ bool initGLAD() {
 	return true;
 }
 
-/* START OF CODE WE CAN REMOVE */
-GLuint shader_program;
-
-bool loadShaders() {
-	// Read Shaders from file
-	std::string vert_shader_str;
-	std::ifstream vs_stream("shaders/vertex_shader.glsl", std::ios::in);
-	if (vs_stream.is_open()) {
-		std::string Line = "";
-		while (getline(vs_stream, Line))
-			vert_shader_str += "\n" + Line;
-		vs_stream.close();
-	}
-	else {
-		printf("Could not open vertex shader!!\n");
-		return false;
-	}
-	const char* vs_str = vert_shader_str.c_str();
-
-	std::string frag_shader_str;
-	std::ifstream fs_stream("shaders/frag_shader.glsl", std::ios::in);
-	if (fs_stream.is_open()) {
-		std::string Line = "";
-		while (getline(fs_stream, Line))
-			frag_shader_str += "\n" + Line;
-		fs_stream.close();
-	}
-	else {
-		printf("Could not open fragment shader!!\n");
-		return false;
-	}
-	const char* fs_str = frag_shader_str.c_str();
-
-	GLuint vs = glCreateShader(GL_VERTEX_SHADER);
-	glShaderSource(vs, 1, &vs_str, NULL);
-	glCompileShader(vs);
-	GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
-	glShaderSource(fs, 1, &fs_str, NULL);
-	glCompileShader(fs);
-
-	shader_program = glCreateProgram();
-	glAttachShader(shader_program, fs);
-	glAttachShader(shader_program, vs);
-	glLinkProgram(shader_program);
-
-	return true;
-}
-
-/* END OF CODE WE CAN REMOVE */
-
 int main() {
 	Logger::Init(); // We'll borrow the logger from the toolkit, but we need to initialize it
 
@@ -162,75 +116,147 @@ int main() {
 
 	// Let OpenGL know that we want debug output, and route it to our handler function
 	glEnable(GL_DEBUG_OUTPUT);
+	glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
 	glDebugMessageCallback(GlDebugMessage, nullptr);
 
 	static const GLfloat points[] = {
 		-0.5f, -0.5f, 0.5f,
 		0.5f, -0.5f, 0.5f,
-		-0.5f, 0.5f, 0.5f,
-		0.5f, -0.5f, 0.5f,
-		-0.5f, 0.5f, 0.5f,
-		0.5f, 0.5f, 0.5f
+		-0.5f, 0.5f, 0.5f
 	};
 
 	static const GLfloat colors[] = {
 		1.0f, 0.0f, 0.0f,
 		0.0f, 1.0f, 0.0f,
-		0.0f, 0.0f, 1.0f,
-		0.0f, 2.0f, 1.0f,
-		2.0f, 0.0f, 2.0f,
-		0.0f, 2.0f, 3.0f
+		0.0f, 0.0f, 1.0f
 	};
 
 	//VBO - Vertex buffer object
-	GLuint pos_vbo = 0;
-	glGenBuffers(1, &pos_vbo);
-	glBindBuffer(GL_ARRAY_BUFFER, pos_vbo);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(points), points, GL_STATIC_DRAW);
+	VertexBuffer::Sptr posVbo = VertexBuffer::Create();
+	posVbo->LoadData(points, 9);
 
-	GLuint color_vbo = 1;
-	glGenBuffers(1, &color_vbo);
-	glBindBuffer(GL_ARRAY_BUFFER, color_vbo);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(colors), colors, GL_STATIC_DRAW);
+	VertexBuffer::Sptr color_vbo = VertexBuffer::Create();
+	color_vbo->LoadData(colors, 9);
 
-	glBindBuffer(GL_ARRAY_BUFFER, pos_vbo);
+	VertexArrayObject::Sptr vao = VertexArrayObject::Create();
+	vao->AddVertexBuffer(posVbo, {
+		BufferAttribute(0, 3, AttributeType::Float, 0, NULL, AttribUsage::Position)
+	});
+	vao->AddVertexBuffer(color_vbo, {
+		{ 1, 3, AttributeType::Float, 0, NULL, AttribUsage::Color }
+	});
 
-	//						index, size, type, normalize?, stride, pointer
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, NULL);
+	static const float interleaved[] = {
+		// X      Y    Z       R     G     B
+		 0.5f, -0.5f, 0.5f,   0.0f, 0.0f, 0.0f,
+		 0.5f,  0.5f, 0.5f,   0.3f, 0.2f, 0.5f,
+		-0.5f,  0.5f, 0.5f,   1.0f, 1.0f, 0.0f,
+		-0.5f, -0.5f, 0.5f,   1.0f, 1.0f, 1.0f
+	};
+	VertexBuffer::Sptr interleaved_vbo = VertexBuffer::Create();
+	interleaved_vbo->LoadData(interleaved, 6 * 4);
 
-	glBindBuffer(GL_ARRAY_BUFFER, color_vbo);
-	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, NULL);
+	static const uint16_t indices[] = {
+		3, 0, 1,
+		3, 1, 2
+	};
+	IndexBuffer::Sptr interleaved_ibo = IndexBuffer::Create();
+	interleaved_ibo->LoadData(indices, 3 * 2);
 
-	glEnableVertexAttribArray(0);//pos
-	glEnableVertexAttribArray(1);//colors
+	size_t stride = sizeof(float) * 6;
+	VertexArrayObject::Sptr vao2 = VertexArrayObject::Create();
+	vao2->AddVertexBuffer(interleaved_vbo, {
+		BufferAttribute(0, 3, AttributeType::Float, stride, 0, AttribUsage::Position),
+		BufferAttribute(1, 3, AttributeType::Float, stride, sizeof(float) * 3, AttribUsage::Color),
+	});
+	vao2->SetIndexBuffer(interleaved_ibo);
 
 	// Load our shaders
+	Shader* shader = new Shader();
+	shader->LoadShaderPartFromFile("shaders/vertex_shader.glsl", ShaderPartType::Vertex);
+	shader->LoadShaderPartFromFile("shaders/frag_shader.glsl", ShaderPartType::Fragment);
+	shader->Link();
 
-	if (!loadShaders())
-		return 1;
-
-	// GL states
+	// GL states, we'll enable depth testing and backface fulling
 	glEnable(GL_DEPTH_TEST);
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_BACK);
+	glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
 
-	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+	// Get uniform location for the model view projection
+	Camera::Sptr camera = Camera::Create();
+	camera->SetPosition(glm::vec3(0, 3, 3));
+	camera->LookAt(glm::vec3(0.0f));
+
+	// Create a mat4 to store our mvp (for now)
+	glm::mat4 transform = glm::mat4(1.0f);
+	glm::mat4 transform2 = glm::mat4(1.0f);
+	glm::mat4 transform3 = glm::mat4(1.0f);
 
 	// Our high-precision timer
 	double lastFrame = glfwGetTime();
+
+	LOG_INFO("Starting mesh build");
+
+	MeshBuilder<VertexPosCol> mesh;
+	MeshFactory::AddIcoSphere(mesh, glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.5f), 3);
+	MeshFactory::AddCube(mesh, glm::vec3(0.0f), glm::vec3(0.5f));
+	VertexArrayObject::Sptr vao3 = mesh.Bake();
+
+	VertexArrayObject::Sptr vao4 = ObjLoader::LoadFromFile("Monkey.obj");
+
+	bool isRotating = true;
+
+	bool isButtonPressed = false;
 
 	///// Game loop /////
 	while (!glfwWindowShouldClose(window)) {
 		glfwPollEvents();
 
+		// WEEK 5: Input handling
+		if (glfwGetKey(window, GLFW_KEY_W)) {
+			if (!isButtonPressed) {
+				// This is the action we want to perform on key press
+				isRotating = !isRotating;
+			}
+			isButtonPressed = true;
+		}
+		else {
+			isButtonPressed = false;
+		}
+
 		// Calculate the time since our last frame (dt)
 		double thisFrame = glfwGetTime();
 		float dt = static_cast<float>(thisFrame - lastFrame);
 
-		glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
+		// TODO: Week 5 - toggle code
+
+		// Rotate our models around the z axis
+		if (isRotating) {
+			transform  = glm::rotate(glm::mat4(1.0f), static_cast<float>(thisFrame), glm::vec3(0, 0, 1));
+		}
+		transform2 = glm::rotate(glm::mat4(1.0f), -static_cast<float>(thisFrame), glm::vec3(0, 0, 1)) * glm::translate(glm::mat4(1.0f), glm::vec3(0, 0.0f, glm::sin(static_cast<float>(thisFrame))));
+		transform3 = glm::rotate(glm::mat4(1.0f), -static_cast<float>(thisFrame), glm::vec3(1, 0, 0)) * glm::translate(glm::mat4(1.0f), glm::vec3(0, glm::sin(static_cast<float>(thisFrame)), 0.0f));
+
+		// Clear the color and depth buffers
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-		glUseProgram(shader_program);
+		// Bind our shader and upload the uniform
+		shader->Bind();
 
-		glDrawArrays(GL_TRIANGLES, 0, 6);
+		// Draw spinny triangle
+		shader->SetUniformMatrix("u_ModelViewProjection", camera->GetViewProjection() * transform);
+		vao->Draw();
+
+		// Draw MeshFactory Sample
+		shader->SetUniformMatrix("u_ModelViewProjection", camera->GetViewProjection()* transform2);
+		vao3->Draw();
+
+		// Draw OBJ loaded model
+		shader->SetUniformMatrix("u_ModelViewProjection", camera->GetViewProjection() * transform3);
+		vao4->Draw();
+
+		VertexArrayObject::Unbind();
 
 		glfwSwapBuffers(window);
 	}
